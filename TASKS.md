@@ -20,7 +20,7 @@ sign-off before proceeding past it.
 | ID | Title | Ref | Deps | Path | Model | Gate | Status |
 |---|---|---|---|---|---|---|---|
 | P0-C1 | Exec/file adapter contract | §1.9, §1.2 | — | SEQ | Opus | ✋ | signed-off (8cbcf32) |
-| P0-V1 | `verify_rom.py` package + fixtures (author) | §1.1, §4.3 | — | SEQ | Opus | ✋ | todo |
+| P0-V1 | `verify_rom.py` package + fixtures (author) | §1.1, §4.3 | — | SEQ | Opus | ✋ | verified — awaiting sign-off |
 | P0-F1 | `gba-dev` footgun reference doc (author) | §1.2 | — | PAR | Sonnet | — | todo |
 | P0-FX1 | Known-good sample + known-bad OAM fixture ROMs | §1.1 | — | PAR | Sonnet | — | built (definitive verify = V1 run) |
 | P0-A1 | Toolchain Dockerfile, inputs pinned | §1.1 WS-A | P0-V1, P0-FX1 | SEQ | Sonnet | — | built: substrate + libmgba validated vs fixtures (verify_rom bake → A2) |
@@ -122,6 +122,11 @@ before Phase 1). P0-B1 + P0-W1 de-risking spikes.
   was stopped at check time).
 
 ## Carried notes (from verification)
+
+- **Deferred (class-D′ liveness/hang):** verify_rom v1 does not detect infinite
+  loops/deadlocks (a BIOS-idle game is indistinguishable from a BIOS-parked hang
+  by CPU snapshot alone). Follow-up: add a `known-bad-hang` fixture + a
+  frame-hash/VCOUNT-progress watchdog. Spec aligned in docs/verify-taxonomy.md.
 
 - P0-L1 (local adapter): reject Windows reserved device names (`nul`, `con`,
   `aux`, `com1`, ADS `name:stream`) when joining a jailed path onto the real

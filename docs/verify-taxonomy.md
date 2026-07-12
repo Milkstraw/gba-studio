@@ -35,17 +35,21 @@ ERROR/FATAL/game-error lines; `pass` = `gameErrors` empty AND execution sane
 | **A** | **Narrow (8/partial) writes to VRAM / OAM / PALRAM** | The founding bug. These regions accept only 16/32-bit access; an 8-bit store is dropped/mirrored by hardware, corrupting adjacent data (the `Store8 to OAM` class). | mGBA game-error log line for the bad store. | **hard fail** |
 | **B** | **Butano runtime assertions** | Engine invariant violated: OAM/sprite/BG/palette/VRAM budget exceeded, out-of-range params, illegal state transitions. | Debug-build Butano writes ERROR/FATAL to the mGBA debug channel. Any such line. | **hard fail** |
 | **C** | **Invalid hardware / I/O access** | Bad DMA setup, writes to invalid/unmapped I/O registers, illegal BIOS calls, bad DISPCNT/mode combos. | mGBA game-error/warn logs. | hard fail (error) / warn |
-| **D** | **CPU / execution faults** | Undefined instruction, branch into unmapped memory, `SP` outside IWRAM/EWRAM, or **no progress** (PC/state static across the whole run = hang/deadlock). | mGBA fatal logs + final CPU snapshot sanity (PC & SP in valid ranges) + a progress heuristic across frames. | **hard fail** |
+| **D** | **CPU / execution faults** | Undefined instruction, branch into unmapped memory, `SP` outside IWRAM/EWRAM. | mGBA fatal logs + final CPU snapshot sanity (PC & SP in valid ranges). | **hard fail** |
+| **D′** | **Liveness / hang** *(deferred)* | No progress — game stuck in an infinite loop / deadlock. | **Not implemented in V1.** A game idling in BIOS `VBlankIntrWait` is indistinguishable from a BIOS-parked hang by the final CPU snapshot alone; a generic progress signal needs more than one snapshot. Tracked follow-up: a `known-bad-hang` fixture + a frame-hash/VCOUNT-progress watchdog. | *(future)* |
 | — | *(visual)* garbage tiles, wrong colors, off-screen sprites | Renders but looks wrong. | **Not log-detectable.** Out of scope for verify_rom → screenshot loop (§1.2). | n/a |
 
 ## Pass/fail rule
 
-`pass == true` iff: **zero** class A/B/C-error/D log lines over the run, AND the
-final CPU state is sane (PC in ROM/IWRAM/EWRAM, SP within a stack region), AND
-the run made progress (not a class-D hang). Class-C warnings are surfaced in
-`gameErrors` but do not by themselves fail — V1 decides the warn/error split and
-records it. Everything captured goes into `gameErrors[]` regardless, so the
-agent (and the small triage model, §1.2) can read it.
+`pass == true` iff: **zero** fail-level lines over the run (class A/B/C-error —
+i.e. any GAME_ERROR/ERROR/FATAL), AND the final CPU state is sane (class D: PC
+in BIOS/ROM/IWRAM/EWRAM, SP within a stack region). Class-D′ liveness/hang is
+**not** part of the v1 rule (deferred, see above). Class-C **warnings** are
+surfaced in `gameErrors` but do **not** fail the verdict. Everything at
+WARN-level and above goes into `gameErrors[]` (deduped with an `(xN)` count so
+identical per-frame lines don't blow up context, §4.5); INFO/DEBUG noise stays
+in `memory.counters` only, so the agent (and the small triage model, §1.2) sees
+signal, not spam.
 
 ## Fixture contract (drives P0-FX1)
 
