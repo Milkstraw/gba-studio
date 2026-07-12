@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>gba-studio — mGBA-WASM spike</title>
+<style>
+  body { background: #111; color: #eee; font: 14px monospace; padding: 1rem; }
+  canvas { image-rendering: pixelated; width: 480px; height: 320px; background: #000; border: 1px solid #444; }
+  button { margin: 0 4px 4px 0; }
+  #log { white-space: pre-wrap; background: #000; color: #7f7; padding: 8px; height: 220px; overflow-y: auto; font-size: 12px; }
+  .row { margin: 8px 0; }
+</style>
+</head>
+<body>
+<h1>gba-studio emulator spike (P0-W1)</h1>
+<p>Core: <code>@thenick775/mgba-wasm</code> (real mGBA compiled to WASM), vendored under <code>vendor/mgba-wasm/</code>.
+ROM: <code id="romName"></code></p>
+
+<canvas id="canvas" width="240" height="160" tabindex="0"></canvas>
+
+<div class="row">
+  <button id="btnAudio">Enable / Resume Audio</button>
+  <button id="btnSaveState">Save State (slot 0)</button>
+  <button id="btnLoadState">Load State (slot 0)</button>
+  <button id="btnScreenshot">Screenshot -&gt; log FS listing</button>
+  <button id="btnFps">Toggle FPS overlay</button>
+</div>
+<p>Click the canvas first so keyboard input is captured by it.
+Keys: Arrows = D-pad, X = A, Z = B, A = L, S = R, Enter = Start, Backspace = Select.</p>
+
+<div id="log"></div>
+
+<script type="module">
+  import mGBA from './vendor/mgba-wasm/dist/mgba.js';
+
+  const logEl = document.getElementById('log');
+  const log = (...args) => {
+    const line = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+    console.log('[spike]', line);
+    logEl.textContent += line + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+
+  window.addEventListener('error', (e) => log('window error:', e.message));
+  window.addEventListener('unhandledrejection', (e) => log('unhandled rejection:', String(e.reason)));
+
+  const ROM_NAME = 'BrickBreakerGBA.gba';
+  document.getElementById('romName').textContent = ROM_NAME;
+
+  const canvas = document.getElementById('canvas');
+
+  // GBA button names understood by buttonPress/buttonUnpress, per vendor/mgba-wasm/dist/mgba.d.ts
+  const KEY_MAP = {
+    ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+    KeyX: 'A', KeyZ: 'B', KeyA: 'L', KeyS: 'R',
+    Enter: 'Start', Backspace: 'Select'
+  };
+
+  async function main() {
+    log('crossOriginIsolated =', crossOriginIsolated, '(must be true for threads/SharedArrayBuffer)');
+    log('loading mGBA module...');
+
+    const Module = await mGBA({ canvas });
+    window.Module = Module; // for manual poking from devtools during human verification
+
+    log('mGBA core:', Module.version.projectName, Module.version.projectVersion);
+
+    await Module.FSInit();
+    log('FS initialized. paths =', Module.filePaths());
+
+    const romBytes = new Uint8Array(await (await fetch(`./roms/${ROM_NAME}`)).arrayBuffer());
+    log('fetched ROM bytes:', romBytes.length);
+
+    const gamePath = `${Module.filePaths().gamePath}/${ROM_NAME}`;
+    Module.FS.writeFile(gamePath, romBytes);
+    log('wrote ROM into emulator FS at', gamePath);
+
+    let frames = 0;
+    let lastReport = performance.now();
+    Module.addCoreCallbacks({
+      videoFrameEndedCallback: () => {
+        frames++;
+        const now = performance.now();
+        if (now - lastReport >= 1000) {
+          log('measured fps (JS-side callback count):', frames);
+          frames = 0;
+          lastReport = now;
+        }
+      },
+      coreCrashedCallback: () => log('!! core crashed callback fired'),
+      saveDataUpdatedCallback: () => log('save data updated callback fired')
+    });
+
+    const ok = Module.loadGame(gamePath);
+    log('loadGame ->', ok);
+    if (!ok) {
+      log('GO/NO-GO: loadGame failed, stop here.');
+      return;
+    }
+
+    canvas.focus();
+
+    // Keyboard input mapping: direct buttonPress/buttonUnpress, no reliance on
+    // internal SDL key-name strings (bindKey) - simplest reliable mapping for the spike.
+    window.addEventListener('keydown', (e) => {
+      const btn = KEY_MAP[e.code];
+      if (btn) { Module.buttonPress(btn); log('keydown ->', e.code, '-> buttonPress', btn); e.preventDefault(); }
+    });
+    window.addEventListener('keyup', (e) => {
+      const btn = KEY_MAP[e.code];
+      if (btn) { Module.buttonUnpress(btn); e.preventDefault(); }
+    });
+
+    document.getElementById('btnAudio').addEventListener('click', () => {
+      Module.resumeAudio();
+      log('resumeAudio() called. SDL2 audioContext.state =', Module.SDL2?.audioContext?.state);
+    });
+
+    document.getElementById('btnSaveState').addEventListener('click', () => {
+      const ok = Module.saveState(0);
+      log('saveState(0) ->', ok);
+    });
+
+    document.getElementById('btnLoadState').addEventListener('click', () => {
+      const ok = Module.loadState(0);
+      log('loadState(0) ->', ok);
+    });
+
+    document.getElementById('btnScreenshot').addEventListener('click', () => {
+      const ok = Module.screenshot('spike.png');
+      log('screenshot() ->', ok, 'listing screenshots dir:',
+        Module.FS.readdir(Module.filePaths().screenshotsPath));
+    });
+
+    document.getElementById('btnFps').addEventListener('click', () => {
+      Module.setCoreSettings({ showFpsCounter: true });
+      log('requested built-in FPS overlay (core-rendered, top of screen)');
+    });
+
+    log('READY. Human checklist: verify picture renders, 60fps overlay, audio, save/load state, keyboard.');
+  }
+
+  main().catch((err) => log('FATAL during init:', err.stack || String(err)));
+</script>
+</body>
+</html>

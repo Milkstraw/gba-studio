@@ -19,7 +19,7 @@ sign-off before proceeding past it.
 
 | ID | Title | Ref | Deps | Path | Model | Gate | Status |
 |---|---|---|---|---|---|---|---|
-| P0-C1 | Exec/file adapter contract | §1.9, §1.2 | — | SEQ | Opus | ✋ | verified — awaiting sign-off |
+| P0-C1 | Exec/file adapter contract | §1.9, §1.2 | — | SEQ | Opus | ✋ | signed-off (8cbcf32) |
 | P0-V1 | `verify_rom.py` package + fixtures (author) | §1.1, §4.3 | — | SEQ | Opus | ✋ | todo |
 | P0-F1 | `gba-dev` footgun reference doc (author) | §1.2 | — | PAR | Sonnet | — | todo |
 | P0-FX1 | Known-good sample + known-bad OAM fixture ROMs | §1.1 | — | PAR | Sonnet | — | todo |
@@ -32,7 +32,7 @@ sign-off before proceeding past it.
 | P0-L1 | Local exec/file adapter (impl of P0-C1) | §1.9 | P0-C1, P0-A1, P0-V1 | PAR | Sonnet | — | todo |
 | P0-L2 | Local control-plane stubs (PG/S3→FS/git bare) | §1.9 | — | PAR | Sonnet | — | todo |
 | P0-L3 | Token-metering logging util | §1.9, §4.5 | — | PAR | Haiku | — | todo |
-| P0-W1 | mGBA-WASM spike (gbajs3) | §1.3 | P0-FX1 | PAR | Sonnet | ✋ | todo |
+| P0-W1 | mGBA-WASM spike (gbajs3) | §1.3 | P0-FX1 | PAR | Sonnet | ✋ | signed-off (GO: @thenick775/mgba-wasm@2.4.1) |
 | P0-E1 | End-to-end script: source→ROM→verify→shot, local+Fly | §3 exit | P0-L1, P0-B1, P0-V1 | SEQ | Sonnet (Opus verify) | ✋ | todo |
 
 ## Phase 1 — Single-user MVP (full resolution)
@@ -106,6 +106,20 @@ before Phase 1). P0-B1 + P0-W1 de-risking spikes.
 2. External creds needed by task: Anthropic key (P1-CP2), Fly token (P0-B1), GHCR (P0-A2).
 3. P0-LIC requires user to contact devkitPro; Opus drafts, user sends.
 4. Local Docker present (Docker 27); local adapter can use the image. Fallback: native `C:\devkitPro`.
+
+## Plan corrections (flagged, awaiting ack)
+
+- **libmgba is NOT a reliable `pip install mgba`** (SYSTEM_PLAN §1.1/§1.2 wording
+  is optimistic). Confirmed: no `mgba` PyPI distribution for Windows/Py3.13; the
+  PyPI package "may not be available for all platforms." Robust acquisition =
+  **build mGBA from source with CMake `-DBUILD_PYTHON=ON`** (pinnable, linux/amd64)
+  inside the toolchain image (P0-A1). Evaluate `hanzi/libmgba-py` (prebuilt bins,
+  possible native-Windows shortcut) and `pygba` when scoping V1/A1. Affects
+  P0-V1 and P0-A1 scope.
+- **Local verify is containerized on Windows.** Native Windows libmgba unavailable,
+  so the local adapter's build+verify runs in the Linux toolchain image (matches
+  §1.9 "same image locally"). **Requires Docker daemon running** (Docker Desktop
+  was stopped at check time).
 
 ## Carried notes (from verification)
 
