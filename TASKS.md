@@ -22,7 +22,7 @@ sign-off before proceeding past it.
 | P0-C1 | Exec/file adapter contract | §1.9, §1.2 | — | SEQ | Opus | ✋ | signed-off (8cbcf32) |
 | P0-V1 | `verify_rom.py` package + fixtures (author) | §1.1, §4.3 | — | SEQ | Opus | ✋ | todo |
 | P0-F1 | `gba-dev` footgun reference doc (author) | §1.2 | — | PAR | Sonnet | — | todo |
-| P0-FX1 | Known-good sample + known-bad OAM fixture ROMs | §1.1 | — | PAR | Sonnet | — | in-progress |
+| P0-FX1 | Known-good sample + known-bad OAM fixture ROMs | §1.1 | — | PAR | Sonnet | — | built (definitive verify = V1 run) |
 | P0-A1 | Toolchain Dockerfile, inputs pinned | §1.1 WS-A | P0-V1, P0-FX1 | SEQ | Sonnet | — | in-progress (libmgba-first) |
 | P0-A2 | GHA build → GHCR (private) + baked smoke suite | §1.1 WS-A | P0-A1, P0-FX1, P0-V1 | PAR | Sonnet | — | todo |
 | P0-A3 | Rollback (last-green digest pinning) | §1.1 WS-A | P0-A2 | PAR | Haiku | — | todo |
