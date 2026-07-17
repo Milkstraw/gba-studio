@@ -24,7 +24,7 @@ sign-off before proceeding past it.
 | P0-F1 | `gba-dev` footgun reference doc (author) | §1.2 | — | PAR | Sonnet | — | todo |
 | P0-FX1 | Known-good sample + known-bad OAM fixture ROMs | §1.1 | — | PAR | Sonnet | — | built (definitive verify = V1 run) |
 | P0-A1 | Toolchain Dockerfile, inputs pinned | §1.1 WS-A | P0-V1, P0-FX1 | SEQ | Sonnet | — | built: substrate + libmgba validated vs fixtures (verify_rom bake → A2) |
-| P0-A2 | GHA build → GHCR (private) + baked smoke suite | §1.1 WS-A | P0-A1, P0-FX1, P0-V1 | PAR | Sonnet | — | built — awaiting independent verification |
+| P0-A2 | GHA build → GHCR (private) + baked smoke suite | §1.1 WS-A | P0-A1, P0-FX1, P0-V1 | PAR | Sonnet | — | verified (Opus) — see carried note |
 | P0-A3 | Rollback (last-green digest pinning) | §1.1 WS-A | P0-A2 | PAR | Haiku | — | todo |
 | P0-LIC | devkitPro licensing determination (written) | §4.3 WS-C | — | PAR | Opus (draft)/user | ✋ | todo |
 | P0-C2 | Wonderful Toolchain variant image | §4.3 WS-C | P0-A1 | PAR | Sonnet | — | todo |
@@ -164,7 +164,7 @@ before Phase 1). P0-B1 + P0-W1 de-risking spikes.
   other unescaped interpolation into shell command strings.
   Windows reserved device names remain unfixed (separate carried note above).
 
-- **P0-A2 built (not yet independently verified):** the build context for
+- **P0-A2 verified (independent, fresh-context, Opus).** the build context for
   `toolchain/Dockerfile` moved from `toolchain/` to the **repo root**
   (`docker build -f toolchain/Dockerfile -t gba-studio-toolchain:dev .`) so
   it can `COPY` in `verify_rom/` and `fixtures/`, which are siblings of
@@ -209,7 +209,25 @@ before Phase 1). P0-B1 + P0-W1 de-risking spikes.
   Nothing in this task pushes the branch to GitHub or triggers the
   workflow — that, and any future decision to flip `push_to_ghcr` on, is
   the user's call, not something to do by default even after P0-A2 is
-  merged. Reviewer: confirm the gate can't be bypassed by an ordinary push,
-  and sanity-check the `.dockerignore` doesn't accidentally exclude
-  something the Dockerfile needs.
+  merged.
+  Verifier independently re-ran the smoke-suite logic fresh inside the
+  container (not trusting a cached `docker build`, since the layers had
+  cache-hit on the verifier's own machine) and confirmed: `verify_rom.py`'s
+  exit-1-on-FAIL claim is real (checked against its own docstring/`main()`),
+  both Dockerfile assertions are correctly oriented (not inverted), the
+  smoke suite genuinely fails the build under a simulated regression (not a
+  no-op), the infra-crash edge case (`verify_rom.py` erroring before
+  producing JSON) still correctly fails the build rather than false-passing,
+  and the GHCR-push `if:` gate cannot be reached by a plain push/PR.
+  **Two non-blocking nits found and addressed:** a stray untracked local
+  directory (`fixtures/known-good/known-good.gba;C`, empty, an artifact of
+  earlier manual debugging — not a code defect, not present in a fresh
+  checkout) was removed from the working tree; and `permissions:
+  packages: write` was scoped from workflow-wide down to just the gated
+  `push` job (split into its own job rather than a step in `build`, so the
+  token only exists on the rarely-triggered manual-publish path — the
+  always-running `build` job that responds to every push/PR no longer
+  holds a registry-write token it never uses). The `push` job rebuilds the
+  image rather than passing it from `build` via artifacts — simpler, and
+  the rebuild cost is a non-issue on a manual-dispatch-only path.
 

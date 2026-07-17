@@ -26,7 +26,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build:
@@ -42,12 +41,26 @@ jobs:
       - name: Build toolchain image
         run: docker build -f toolchain/Dockerfile -t gba-studio-toolchain:ci .
 
-      # Everything below only runs on a manual, explicitly-confirmed
-      # workflow_dispatch — never on an ordinary push/PR. Do not remove
-      # that gate: toolchain/README.md's licensing note and SYSTEM_PLAN.md
-      # §4.3 (P0-LIC) are unresolved as of this workflow's authoring.
+  # Separate job (not a step in `build`) so the `packages: write` token only
+  # exists for the one path that needs it — an ordinary push/PR never gets
+  # it. Rebuilds the image rather than passing it between jobs: this path
+  # only runs on a deliberate manual dispatch, so the extra build cost is a
+  # non-issue and it avoids the complexity of a docker save/upload-artifact/
+  # download-artifact/load round-trip for something rarely triggered.
+  push:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.push_to_ghcr
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build toolchain image
+        run: docker build -f toolchain/Dockerfile -t gba-studio-toolchain:ci .
+
       - name: Log in to GHCR
-        if: github.event_name == 'workflow_dispatch' && inputs.push_to_ghcr
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -55,7 +68,6 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push to GHCR (private)
-        if: github.event_name == 'workflow_dispatch' && inputs.push_to_ghcr
         run: |
           set -euo pipefail
           image="ghcr.io/${{ github.repository_owner }}/gba-studio-toolchain"
