@@ -1,0 +1,65 @@
+name: toolchain-image
+
+on:
+  push:
+    branches: [main, 'build/**']
+    paths:
+      - 'toolchain/**'
+      - 'verify_rom/**'
+      - 'fixtures/**'
+      - '.github/workflows/toolchain-image.yml'
+  pull_request:
+    paths:
+      - 'toolchain/**'
+      - 'verify_rom/**'
+      - 'fixtures/**'
+  workflow_dispatch:
+    inputs:
+      push_to_ghcr:
+        description: >-
+          Push the built image to GHCR (private). This is the P0-LIC
+          licensing gate (SYSTEM_PLAN.md §4.3, unresolved as of writing) —
+          only enable this with a deliberate decision to publish, even
+          privately.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # P0-A2: the smoke suite is baked into toolchain/Dockerfile itself —
+      # it builds the known-good and known-bad-oam fixtures from source
+      # inside the image and asserts verify_rom's verdict on each (good
+      # must PASS, bad-oam must FAIL). A regression fails this build step
+      # directly; there is no separate smoke-test step to keep in sync.
+      - name: Build toolchain image
+        run: docker build -f toolchain/Dockerfile -t gba-studio-toolchain:ci .
+
+      # Everything below only runs on a manual, explicitly-confirmed
+      # workflow_dispatch — never on an ordinary push/PR. Do not remove
+      # that gate: toolchain/README.md's licensing note and SYSTEM_PLAN.md
+      # §4.3 (P0-LIC) are unresolved as of this workflow's authoring.
+      - name: Log in to GHCR
+        if: github.event_name == 'workflow_dispatch' && inputs.push_to_ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to GHCR (private)
+        if: github.event_name == 'workflow_dispatch' && inputs.push_to_ghcr
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${{ github.repository_owner }}/gba-studio-toolchain"
+          docker tag gba-studio-toolchain:ci "$image:${{ github.sha }}"
+          docker tag gba-studio-toolchain:ci "$image:dev"
+          docker push "$image:${{ github.sha }}"
+          docker push "$image:dev"

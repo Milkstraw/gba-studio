@@ -24,7 +24,7 @@ sign-off before proceeding past it.
 | P0-F1 | `gba-dev` footgun reference doc (author) | §1.2 | — | PAR | Sonnet | — | todo |
 | P0-FX1 | Known-good sample + known-bad OAM fixture ROMs | §1.1 | — | PAR | Sonnet | — | built (definitive verify = V1 run) |
 | P0-A1 | Toolchain Dockerfile, inputs pinned | §1.1 WS-A | P0-V1, P0-FX1 | SEQ | Sonnet | — | built: substrate + libmgba validated vs fixtures (verify_rom bake → A2) |
-| P0-A2 | GHA build → GHCR (private) + baked smoke suite | §1.1 WS-A | P0-A1, P0-FX1, P0-V1 | PAR | Sonnet | — | todo |
+| P0-A2 | GHA build → GHCR (private) + baked smoke suite | §1.1 WS-A | P0-A1, P0-FX1, P0-V1 | PAR | Sonnet | — | built — awaiting independent verification |
 | P0-A3 | Rollback (last-green digest pinning) | §1.1 WS-A | P0-A2 | PAR | Haiku | — | todo |
 | P0-LIC | devkitPro licensing determination (written) | §4.3 WS-C | — | PAR | Opus (draft)/user | ✋ | todo |
 | P0-C2 | Wonderful Toolchain variant image | §4.3 WS-C | P0-A1 | PAR | Sonnet | — | todo |
@@ -163,4 +163,53 @@ before Phase 1). P0-B1 + P0-W1 de-risking spikes.
   this adapter is ever composed behind a less-trusted caller, re-audit for
   other unescaped interpolation into shell command strings.
   Windows reserved device names remain unfixed (separate carried note above).
+
+- **P0-A2 built (not yet independently verified):** the build context for
+  `toolchain/Dockerfile` moved from `toolchain/` to the **repo root**
+  (`docker build -f toolchain/Dockerfile -t gba-studio-toolchain:dev .`) so
+  it can `COPY` in `verify_rom/` and `fixtures/`, which are siblings of
+  `toolchain/`. A root `.dockerignore` keeps that context small and —
+  important — excludes fixture `build/`/`*.gba`/`*.elf` output, forcing a
+  real from-source rebuild inside the image rather than risking a stale
+  pre-built artifact. The smoke suite is baked into the Dockerfile as the
+  last two `RUN` steps (same pattern as P0-A1's libmgba proof): known-good
+  must build and `verify_rom` must report `pass:true`; known-bad-oam must
+  build and `verify_rom` must report `pass:false` (the actual moat proof —
+  confirmed catching `Cannot Store8 to OAM`). A regression in either fails
+  `docker build` itself; the GHA workflow's only job is to run that same
+  build, so a green build == a green smoke suite, no separate CI step to
+  keep in sync.
+  **Debugging note worth carrying forward:** `make clean` against these
+  fixtures behaves differently depending on how the files reach the
+  container — it fails ("No rule to make target 'clean'", butano.mak
+  genuinely defines no clean target) when the fixture directory is a Docker
+  **bind mount** (`docker run -v host:/work`), but succeeds when the same
+  files are baked in via `COPY` (a real image layer). Cost real debugging
+  time chasing what looked like a fixture regression before landing on the
+  actual bug (below). Root cause not fully characterized — plausibly a
+  Docker Desktop bind-mount filesystem quirk affecting some make internal
+  (`.d`-file remake rule, mtime comparison) — but reproducible and
+  consistent both directions. If a future task needs `make clean` to work
+  against a *bind-mounted* project (e.g. extending P0-L1), don't assume
+  parity with the baked-image behavior; verify directly.
+  **Actual bug found and fixed:** the initial Dockerfile smoke-test RUN
+  steps `&&`-chained directly after `verify_rom.py --json`, which exits 1
+  on a FAIL verdict by its own convention (`verify_rom/verify_rom.py`) —
+  for known-bad-oam, FAIL is the *correct, expected* verdict, so its exit
+  code was silently aborting the chain before my own pass/fail assertion
+  ever ran, making a correctly-working verifier look like a build failure.
+  Fixed with `|| true` after the verify_rom.py invocation in both RUN
+  steps, so the trailing Python assertion is what actually decides each
+  step's outcome.
+  **GHCR push is gated behind a manual `workflow_dispatch` boolean input**
+  (`push_to_ghcr`, default `false`) — an ordinary push/PR only builds and
+  smoke-tests, never publishes. This is deliberate: P0-LIC (devkitPro
+  licensing determination) is still `todo`, and `toolchain/README.md`
+  documents "do not push this image to any registry" until it resolves.
+  Nothing in this task pushes the branch to GitHub or triggers the
+  workflow — that, and any future decision to flip `push_to_ghcr` on, is
+  the user's call, not something to do by default even after P0-A2 is
+  merged. Reviewer: confirm the gate can't be bypassed by an ordinary push,
+  and sanity-check the `.dockerignore` doesn't accidentally exclude
+  something the Dockerfile needs.
 

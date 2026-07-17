@@ -9,8 +9,9 @@
 # do not push to any registry (P0-LIC, devkitPro licensing, is unresolved —
 # SYSTEM_PLAN.md §4.3).
 #
-# Build:
-#   docker build -t gba-studio-toolchain:dev toolchain/
+# Build (context is the REPO ROOT, not this dir — P0-A2 needs to COPY in
+# verify_rom/ and fixtures/, both siblings of toolchain/):
+#   docker build -f toolchain/Dockerfile -t gba-studio-toolchain:dev .
 #
 # ---------------------------------------------------------------------------
 # Base: official devkitPro devkitARM image, pinned by digest. This already
@@ -89,17 +90,43 @@ RUN git clone https://github.com/GValiente/butano.git /opt/butano \
 
 WORKDIR /toolchain
 
-# Seam for P0-V1 (verify_rom.py) and P0-FX1 (known-good/known-bad fixture
-# ROMs): neither exists yet (both are separate, not-yet-built tasks). When
-# they land, COPY them in here, e.g.:
-#   COPY verify_rom /toolchain/verify_rom
-#   RUN pip3 install --break-system-packages --no-cache-dir -r /toolchain/verify_rom/requirements.txt
-#   COPY fixtures /toolchain/fixtures
-# and wire the CI smoke suite (P0-A2) to run them against this image.
+# P0-A1 proof only (NOT verify_rom.py — see below): a minimal script that
+# proves the libmgba headless runtime + Python bindings work end to end,
+# using a real ROM copied in from GBA-Game/BrickBreak.
+COPY toolchain/proof /toolchain/proof
 
-# P0-A1 proof only (NOT verify_rom.py — see seam above): a minimal script
-# that proves the libmgba headless runtime + Python bindings work end to
-# end, using a real ROM copied in from GBA-Game/BrickBreak.
-COPY proof /toolchain/proof
+# ---------------------------------------------------------------------------
+# P0-A2: bake in verify_rom.py (P0-V1) and the P0-FX1 fixtures, then prove
+# the whole build->verify loop works INSIDE the image, the same way the
+# libmgba proof above does — a regression fails `docker build` itself, not
+# a later CI step. Build context is the repo root (see toolchain/README.md),
+# not this directory, so these paths reach the siblings of toolchain/.
+COPY verify_rom /toolchain/verify_rom
+COPY fixtures /toolchain/fixtures
+
+# Known-good must build and PASS verify (zero GAME_ERROR lines). `make
+# clean` first: fixture dirs carry committed build/ output for local dev
+# convenience, and Docker COPY resets mtimes, which could otherwise fool
+# make's incremental build into skipping a real compile.
+#
+# `|| true` after verify_rom.py: it exits 1 on a FAIL verdict by its own
+# convention (verify_rom/verify_rom.py), which would otherwise short-circuit
+# this && chain before the assertion below ever runs — for known-bad-oam
+# below, a FAIL is the *expected, correct* verdict, so its own exit code
+# must not be the thing that decides whether this RUN step passes.
+RUN cd /toolchain/fixtures/known-good \
+    && make LIBBUTANO=/opt/butano/butano clean \
+    && make LIBBUTANO=/opt/butano/butano \
+    && (python3 /toolchain/verify_rom/verify_rom.py known-good.gba --frames 300 --json > /tmp/known-good.json || true) \
+    && python3 -c "import json,sys; sys.exit(0 if json.load(open('/tmp/known-good.json'))['pass'] else 1)"
+
+# Known-bad-OAM must build and FAIL verify (this is the moat: proves the
+# harness actually catches the illegal-hardware-write bug class, not just
+# that it passes clean code).
+RUN cd /toolchain/fixtures/known-bad-oam \
+    && make LIBBUTANO=/opt/butano/butano clean \
+    && make LIBBUTANO=/opt/butano/butano \
+    && (python3 /toolchain/verify_rom/verify_rom.py known-bad-oam.gba --frames 300 --json > /tmp/known-bad-oam.json || true) \
+    && python3 -c "import json,sys; sys.exit(0 if not json.load(open('/tmp/known-bad-oam.json'))['pass'] else 1)"
 
 CMD ["bash"]

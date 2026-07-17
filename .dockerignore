@@ -1,0 +1,16 @@
+# Build context for toolchain/Dockerfile is the repo root (needed to COPY
+# verify_rom/ and fixtures/, which are siblings of toolchain/, not inside
+# it). Keep that context small and deterministic.
+node_modules
+.git
+packages/*/dist
+emulator/vendor
+
+# Fixture build output must NOT ship in the context: Docker COPY resets
+# mtimes, which can trick `make`'s timestamp-based incremental build into
+# skipping a real rebuild — defeating the point of the baked-in smoke test
+# (P0-A2), which must build each fixture from source, not reuse a stale
+# pre-built .gba.
+fixtures/*/build
+fixtures/*/*.gba
+fixtures/*/*.elf

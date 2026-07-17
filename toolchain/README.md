@@ -12,8 +12,13 @@ devkitPro's redistribution terms for a commercial service are unresolved
 ## Build
 
 ```bash
-docker build -t gba-studio-toolchain:dev toolchain/
+docker build -f toolchain/Dockerfile -t gba-studio-toolchain:dev .
 ```
+
+Run from the repo root, not `toolchain/` — the build context has to be the
+repo root so the Dockerfile can `COPY` in `verify_rom/` and `fixtures/`
+(P0-A2), which live outside `toolchain/`. A root `.dockerignore` keeps that
+context small (excludes `node_modules`, `.git`, fixture `build/` output).
 
 Everything the image needs (mGBA source, Butano source) is fetched from
 GitHub *during the build* — the running container itself needs no network
@@ -108,13 +113,28 @@ For a project *outside* `/opt/butano/examples` (e.g. a user's own project
 mounted or copied into the container), point `LIBBUTANO` at the vendored
 path explicitly: `make LIBBUTANO=/opt/butano/butano`.
 
-## Seams left for later tasks
+## P0-A2: baked-in smoke suite
 
-- **P0-V1 (`verify_rom.py`)** and **P0-FX1 (known-good / known-bad-OAM
-  fixture ROMs)** do not exist yet — they are separate, not-yet-built tasks.
-  The `Dockerfile` has a comment block marking exactly where to `COPY` them
-  in once they land, and where to wire the CI smoke suite (P0-A2) that will
-  run them against this image.
+`verify_rom/` (P0-V1) and `fixtures/` (P0-FX1) are `COPY`'d into the image
+and exercised as the last two build steps, same pattern as the libmgba
+proof above — a regression fails `docker build` itself, not a later CI
+step:
+
+- **known-good** must build and `verify_rom` must report `pass: true`
+  (zero `GAME_ERROR` lines).
+- **known-bad-oam** must build and `verify_rom` must report `pass: false`
+  — this is the actual moat proof: the harness catches the illegal
+  hardware-write bug class, not just "passes on clean code".
+
+Both steps run `make ... clean` first: the fixture dirs carry committed
+`build/` output for local dev convenience, and `COPY` resets mtimes, which
+could otherwise fool `make`'s incremental build into skipping a real
+compile and silently testing a stale artifact.
+
+The GitHub Actions workflow (`.github/workflows/toolchain-image.yml`) just
+runs this same `docker build` — no separate smoke-test CI step needed,
+since a broken fixture already fails the build.
+
 - `toolchain/proof/verify_smoke.py` is deliberately **not** `verify_rom.py`
   — it has no pass/fail taxonomy (see `docs/verify-taxonomy.md`), it just
   proves the runtime works. Don't extend it in place; author `verify_rom.py`
