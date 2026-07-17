@@ -115,6 +115,25 @@ curated hardware-footgun doc from `GBA-Game`) as a first-class skill, loaded
 per-session. It already exists and directly targets the failure mode the
 product was founded on.
 
+**[Decision] Route by task, not one model for everything.** Tokens are the
+dominant cost (§4.5), so the agent uses a two-tier model split:
+- **Small/fast model (Haiku-class)** for the mechanical, low-reasoning
+  work: file-tree navigation (`glob`/`grep`), reading files for context,
+  triaging build logs, parsing compiler errors into structured form,
+  classifying whether a `verify_rom` failure is a code bug vs. an asset
+  bug. This is the bulk of the tool calls and none of it needs a frontier
+  model.
+- **Large model (Opus/Sonnet-class)** for the actual reasoning: authoring
+  and editing C++ game code, deciding what to change in response to a
+  screenshot, planning multi-step features. Invoked only when reasoning is
+  required.
+- **Prompt caching is not optional.** The system prompt, the `gba-dev`
+  skill, the toolchain/API reference, and the stable parts of the project
+  (template code, unchanged files) are cached once and reused across every
+  turn and every session — this is the single biggest token lever, applied
+  before model routing even matters. The router and the cache together are
+  what make the per-user economics in §4.5 work.
+
 **Session model:** one agent session ↔ one VM ↔ one project checkout.
 Conversation history persists in Postgres (per-project threads).
 Interrupted/idle sessions: VM suspended after 5 min idle, destroyed after
@@ -188,6 +207,13 @@ A tile-aware editor is a v2/v3 feature gated on user demand.
   conversation threads, billing meters, asset metadata.
 - **S3-compatible object storage** (Tigris on Fly, or R2): built ROMs,
   screenshots, save states, uncommitted-workspace snapshots, image assets.
+- **ROM export.** The compiled artifact is a standard `.gba` binary; the
+  finished ROM is always downloadable as a plain file (playable on real
+  hardware via flash cart, or in any GBA emulator). This is a first-class,
+  day-one affordance — build-from-source only, never a ROM *upload* (§4.4).
+  mGBA save states are likewise exportable (§1.3). The shareable read-only
+  "play this ROM in the browser" link is the Phase-3 growth layer on top of
+  this same artifact.
 - **Auth: [Decision] GitHub OAuth + email magic link via a library
   (better-auth / Auth.js), self-hosted.** The audience is developers; GitHub
   covers 95%. Clerk/WorkOS would cost real money at scale for no
@@ -249,6 +275,75 @@ the control plane handles the few genuinely async jobs: VM
 suspend/snapshot, git housekeeping, nightly image smoke tests, and (later)
 batch art-pipeline jobs. **[Decision] Postgres-backed job queue
 (pg-boss)** — no Redis/RabbitMQ until measured need.
+
+### 1.9 Local development harness (build the whole loop before touching Fly)
+
+**[Decision] The VM is reached only through a narrow exec/file interface,
+and that interface has two implementations behind one contract.** The agent
+never calls Fly directly; it calls an adapter with a fixed surface
+(`write_file`, `read_file`, `bash`, `build`, `verify_rom`, `screenshot`).
+Two implementations satisfy that contract:
+- **Local adapter (dev):** a thin CLI/daemon on the developer's own machine
+  that runs the *same* toolchain Docker image locally, writes to a temp
+  project dir, shells out to the real `make` / `verify_rom` / libmgba, and
+  returns the same structured results. No Fly, no cloud, no egress concerns.
+- **Remote adapter (prod):** the same calls over Fly Machines' authenticated
+  exec API to a per-session microVM (§1.7).
+
+Because the agent code depends on the contract and not the transport,
+swapping local→remote is a config change, not a rewrite.
+
+**Why this ordering:** the entire product loop — chat → draft code → build →
+verify → screenshot-into-context → iterate — can be built, run, and debugged
+on one laptop for ~zero infra cost. You learn the expensive lessons (does the
+mandatory verify loop create weird failure modes? does the agent actually
+*look* at screenshots or just trust logs? how many tokens does "make me a
+breakout game" really burn?) before spending a dollar on cloud VMs, auth, or
+billing. Control-plane dependencies are stubbed locally: Postgres in Docker,
+S3 replaced by the local filesystem, git repos as bare dirs on disk.
+
+**Local token metering:** the Agent SDK returns token counts per call; log
+them per session so cache-hit savings and the Haiku-vs-Opus cost split
+(§1.2) are visible in dev, not discovered in production. This is the cheapest
+possible place to tune the cost model in §4.5.
+
+### 1.10 Templates & reusable patterns (the biggest lever on output quality)
+
+The agent produces far better games faster when it *edits known-good code*
+than when it authors from a blank file — so reusable code is a first-class
+system component, not a Phase-2 afterthought.
+
+- **Genre starter templates** (platformer, top-down, puzzle, shmup): each is
+  a complete, compiling Butano project with the universally-shared machinery
+  already written and proven — sprite/entity handling (position, velocity,
+  collision), input mapping, basic physics (gravity, ground detection),
+  camera-follow, and animation loops. "Make a platformer" forks the template
+  and tunes it; it never reinvents jump physics.
+- **[Decision] Parameterize the magic numbers.** Each template exposes its
+  tunable constants (jump height, walk speed, gravity, sprite dimensions,
+  scroll speed) as named, swappable parameters. "Platformer with a double
+  jump and floatier gravity" becomes constant edits, not an engine rewrite —
+  cheaper tokens, more reliable output.
+- **Reusable pattern library:** a small Butano library of common subsystems
+  (health/damage, collision layers, enemy-AI state machines, HUD elements)
+  that templates and the agent *call into* rather than re-authoring each
+  game. This is the durable answer to "why regenerate character health and
+  movement every time?" — the answer is that it shouldn't be regenerated;
+  it's library code the agent composes.
+- **[Decision] Template authoring loop, modeled on Claude Code's skill
+  creator.** Any finished game *or subsystem* can be promoted to a template
+  from inside the product: "Save as template" snapshots the project
+  structure, extracts/parameterizes its tunable constants, tags and
+  describes it, and stores it. **Templates are bare git repos in the same
+  git host as projects** — so versioning, forking, and rollback are free git
+  operations and need no bespoke store. New projects fork from a template;
+  the system prompt lists available templates plus their parameters so the
+  agent picks the closest match and starts from proven code.
+
+*Rollout:* one genre starter ships in Phase 1 (it's how the Breakout
+dogfood milestone gets good). The remaining starters, the parameter
+extraction, the pattern library, and the save-as-template authoring loop
+land in Phase 2.
 
 ---
 
@@ -400,32 +495,95 @@ production-grade: ~6 months, consistent with the README's upper band.
 
 ### Phase 0 — Foundation (Weeks 1–3)
 
-- Toolchain image (§1.1) building in GHA, published to GHCR, with the
-  known-good/known-bad smoke tests green in CI. **Includes the licensing
-  determination (§4.3) — resolve before the image is public.**
+Phase 0 is three parallel workstreams, each with its own acceptance test.
+Each is small and self-contained enough to hand off as a discrete unit of
+work; "done" is defined for each so a builder knows exactly when to stop.
+
+**Workstream A — Toolchain image (the blocking dependency).**
+- Dockerfile assembling devkitARM (or Wonderful Toolchain — see C), Butano
+  vendored at a pinned commit, `grit`, `mmutil`, `gbafix`, Python 3 +
+  `mgba` (libmgba), `verify_rom.py`, git, make. Target `linux/amd64`.
+- **Every input pinned** (devkitPro pacman package versions, Butano commit)
+  so the image is byte-for-byte rebuildable modulo timestamps.
+- **GitHub Actions workflow** that builds the image with real internet
+  access and pushes to **GHCR (private** until licensing clears, §4.3).
+- **Smoke-test suite baked into CI, two fixtures:** build the known-good
+  Butano sample → run 60 frames headless → assert zero `GAME_ERROR` lines;
+  build the known-bad OAM-corruption fixture from `GBA-Game` → assert the
+  harness *catches* it. Either fixture failing blocks the image from
+  shipping.
+- **Rollback plan:** last-green image tag is retained; a failed nightly
+  rebuild pins consumers to the previous digest rather than shipping broken.
+- *Acceptance:* `docker run image make -C /templates/butano-hello && docker
+  run image verify_rom out.gba --frames 300` passes in CI.
+
+**Workstream B — Fly Machines spike (de-risk the session model).**
+- Boot the toolchain image as a Machine; exec a build over the authenticated
+  exec API; retrieve the ROM.
+- **Measure and record:** cold-boot latency, suspend/resume latency (the
+  5-min-idle → resume path from §1.2), and per-call exec latency for file
+  writes and shell commands.
+- **Workspace snapshot round-trip:** write files → snapshot to S3 → destroy
+  the Machine → recreate → restore → confirm the project is intact and
+  builds.
+- Confirm the per-session token-minted daemon auth (§1.7) rejects commands
+  not from the control plane.
+- *Acceptance:* a recorded timings table + a passing snapshot round-trip;
+  go/no-go on Fly vs. E2B/Modal recorded with the numbers behind it.
+
+**Workstream C — Toolchain licensing determination (the sleeper risk).**
+- Put the exact questions to devkitPro **in writing** (not a Slack thread):
+  what their pacman packaging/hosting terms permit for an image baked into a
+  commercial service and possibly distributed publicly, distinct from the
+  GPL rights to the components themselves (§4.3).
+- **Set a decision deadline** — this must resolve before the image is ever
+  public.
+- **Maintain a tested Wonderful Toolchain variant** of the image, pinned to
+  the exact Butano commit it's verified against, as both leverage and
+  fallback.
+- *Acceptance:* a written go/no-go on public distribution, and a
+  Wonderful-Toolchain image that passes the same Workstream-A smoke tests.
+
+**Also in Phase 0:**
 - `verify_rom.py` ported from `GBA-Game` into this repo as a first-class
   package with its own fixture tests.
 - mGBA-WASM spike (§1.3): gbajs3 core running a Butano ROM at 60fps with
-  audio in a bare HTML page. Go/no-go decision recorded.
-- Fly Machines spike: boot the image as a Machine, exec a build, retrieve
-  the ROM, measure cold-boot and suspend/resume timings.
+  audio in a bare HTML page. Go/no-go recorded.
+- Stand up the **local development harness** (§1.9): the local exec/file
+  adapter + the toolchain image running locally, so Phase 1 can be built
+  offline. This is the highest-leverage Phase-0 item after the image itself.
 
-*Exit criteria:* CI-built image; a script that takes Butano source → ROM →
-verified → screenshot, end to end, in a Fly Machine.
+*Exit criteria:* CI-built image (both toolchain variants); a script that
+takes Butano source → ROM → verified → screenshot end to end, running both
+locally (§1.9) and in a Fly Machine.
 
 ### Phase 1 — Single-user MVP (Weeks 4–10)
 
+- **Build against the local harness (§1.9) first, lift to Fly second.** All
+  of Phase 1's agent-loop work runs on one machine with the local adapter
+  before any of it touches cloud infra. Only once the loop is proven does
+  the remote adapter get swapped in.
 - Control plane skeleton: sessions, project git repos, WebSocket protocol.
-- Agent runner with the full tool set (§1.2) including the mandatory
-  build+verify+screenshot loop and the `gba-dev` skill embedded.
+- Agent runner with the full tool set (§1.2), the two-tier model routing +
+  prompt caching (§1.2), and the mandatory build+verify+screenshot loop with
+  the `gba-dev` skill embedded.
 - Frontend shell: chat + Monaco + emulator panel + file tree, single user,
   no auth (deploy behind a password).
 - Asset import: PNG → grit → wired into Butano, with the constraint
   validator (§1.4) as both tool and UI feedback.
-- Dogfood milestone: **build one small complete game (e.g. a Breakout
-  clone with imported sprites) start-to-finish through the product UI
-  only.** This is the MVP acceptance test — matches the README's 4–8 week
-  MVP estimate.
+- **One genre starter template** (§1.10) so the agent edits proven code for
+  the dogfood game rather than authoring from zero.
+- ROM download from the UI (§1.5).
+
+**First-playable milestone (~week 6–7 of the project):** a text prompt like
+"make a Breakout clone" produces a compiled, verified ROM running live in
+the browser emulator — end to end through the product, on the local harness.
+It won't be *polished*, but it proves the whole loop works and is the point
+where the core idea is validated or falsified cheaply.
+
+- Dogfood milestone (MVP acceptance): **build one small complete game (a
+  Breakout clone with imported sprites) start-to-finish through the product
+  UI only.** Matches the README's 4–8 week MVP estimate.
 
 ### Phase 2 — Multi-tenant beta (Weeks 11–18)
 
@@ -434,10 +592,14 @@ verified → screenshot, end to end, in a Fly Machine.
 - Billing meters + Stripe integration + free/Pro tiers.
 - Session lifecycle: suspend/resume, workspace snapshots, reconnect UX.
 - GitHub export via OAuth user-token flow.
-- Project templates (3–4 genre starters: platformer, top-down, puzzle,
-  shmup) — templates are the biggest lever on perceived agent quality,
-  because the agent modifies known-good code instead of authoring from
-  zero.
+- **Template system, full build-out (§1.10):** remaining genre starters
+  (platformer, top-down, puzzle, shmup); parameter extraction so tunable
+  constants are swappable without code edits; the reusable Butano pattern
+  library (health, collision, enemy-AI state machines, HUD); and the
+  **save-as-template authoring loop** (promote any finished game or
+  subsystem to a reusable, git-versioned template, à la Claude Code's skill
+  creator). Templates are the biggest lever on perceived agent quality,
+  because the agent modifies known-good code instead of authoring from zero.
 - Observability: per-session traces (agent turns, tool calls, build/verify
   outcomes), cost dashboards (tokens + VM-minutes per user), error alerting.
 - Closed beta, ~20–50 users.
@@ -577,3 +739,7 @@ with a hardware manual, not a game designer).
 | 12 | Art: validator+pipeline in v1; static-sprite beta via Retro Diffusion in v1.5; no in-house fine-tune yet; no animation promises | §2.4 |
 | 13 | Keep GHCR image private until licensing resolved; maintain Wonderful Toolchain variant | §4.3 |
 | 14 | No ROM uploads, ever; build-from-source only | §4.4 |
+| 15 | Two-tier model routing (small model for navigation/triage, large for code authorship); prompt caching mandatory | §1.2 |
+| 16 | VM reached via a two-implementation exec/file contract; build on the local harness first, lift to Fly second | §1.9 |
+| 17 | Templates parameterized + git-versioned; reusable Butano pattern library; save-as-template authoring loop (à la Claude Code skills) | §1.10 |
+| 18 | Finished ROM always downloadable as a plain `.gba`; save states exportable | §1.5 |
