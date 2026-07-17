@@ -31,6 +31,14 @@ import { parseDiagnostics } from './diagnostics.js';
 
 const BUILD_EXIT_MARKER = 'GBA_STUDIO_BUILD_EXIT';
 
+/** Single-quote a value for safe interpolation into the `bash -lc` command
+ *  string. Path-jailing stops directory escapes but not shell metacharacters
+ *  in a filename (e.g. `poc$(touch x).gba`) — confirmed exploitable in
+ *  verification, fixed here rather than relying on jailing alone. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 export interface LocalAdapterOptions {
   /** Host directory that is the project root (mounted at /work in-container). */
   projectRoot: string;
@@ -159,7 +167,7 @@ export class LocalAdapter implements ExecFileAdapter {
     const frames = opts?.frames ?? LIMITS.verifyDefaultFrames;
     const relRom = jailRelativePath(romPath);
     if (!relRom.ok) return relRom;
-    const command = `python3 /toolchain/verify_rom/verify_rom.py "${relRom.value}" --frames ${frames} --json`;
+    const command = `python3 /toolchain/verify_rom/verify_rom.py ${shellQuote(relRom.value)} --frames ${frames} --json`;
 
     let raw;
     try {
@@ -194,7 +202,7 @@ export class LocalAdapter implements ExecFileAdapter {
     const relRom = jailRelativePath(romPath);
     if (!relRom.ok) return relRom;
     const frameArgs = frames.map((f) => String(f)).join(' ');
-    const command = `python3 /toolchain/verify_rom/screenshot_rom.py "${relRom.value}" --frames ${frameArgs} --json`;
+    const command = `python3 /toolchain/verify_rom/screenshot_rom.py ${shellQuote(relRom.value)} --frames ${frameArgs} --json`;
 
     let raw;
     try {

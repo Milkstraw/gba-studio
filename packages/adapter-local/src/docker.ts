@@ -47,7 +47,7 @@ export function runInContainer(opts: DockerRunOptions): Promise<DockerRunResult>
     '-v',
     `${toMountPath(opts.projectRoot)}:/work`,
     '-v',
-    `${toMountPath(opts.verifyRomDir)}:/toolchain/verify_rom`,
+    `${toMountPath(opts.verifyRomDir)}:/toolchain/verify_rom:ro`,
     '-w',
     '/work',
     opts.image,

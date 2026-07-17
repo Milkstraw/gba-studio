@@ -97,6 +97,25 @@ test('LocalAdapter: build + verifyRom + screenshot against the known-good fixtur
     }
   });
 
+  await t.test('shell metacharacters in a romPath are not executed (regression, verification finding)', async () => {
+    const maliciousName = 'poc$(touch INJECTED).gba';
+    const write = await adapter.writeFile(maliciousName, 'not a real rom');
+    assert.ok(write.ok);
+
+    const result = await adapter.verifyRom(maliciousName, { frames: 1 });
+    // Not a real ROM, so verify_rom.py fails to load it — that's expected.
+    assert.ok(!result.ok);
+    if (!result.ok) assert.equal(result.error.code, 'INVALID');
+
+    // The real assertion: the embedded `$(touch INJECTED)` must never have
+    // run as a shell command inside the container.
+    const injected = await fs
+      .access(path.join(projectRoot, 'INJECTED'))
+      .then(() => true)
+      .catch(() => false);
+    assert.equal(injected, false, 'shell substitution in the romPath executed inside the container');
+  });
+
   await t.test('screenshot captures requested frames as PNGs', async () => {
     assert.ok(romPath, 'build step must have produced a romPath');
     const result = await adapter.screenshot(romPath, [1, 30]);

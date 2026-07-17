@@ -29,7 +29,7 @@ sign-off before proceeding past it.
 | P0-LIC | devkitPro licensing determination (written) | §4.3 WS-C | — | PAR | Opus (draft)/user | ✋ | todo |
 | P0-C2 | Wonderful Toolchain variant image | §4.3 WS-C | P0-A1 | PAR | Sonnet | — | todo |
 | P0-B1 | Fly Machines spike + timings + snapshot + auth-reject | §1.7 WS-B | P0-A2 | PAR | Sonnet (Opus rev) | ✋ | todo |
-| P0-L1 | Local exec/file adapter (impl of P0-C1) | §1.9 | P0-C1, P0-A1, P0-V1 | PAR | Sonnet | — | built — awaiting independent verification |
+| P0-L1 | Local exec/file adapter (impl of P0-C1) | §1.9 | P0-C1, P0-A1, P0-V1 | PAR | Sonnet | — | verified (Opus) — see carried note |
 | P0-L2 | Local control-plane stubs (PG/S3→FS/git bare) | §1.9 | — | PAR | Sonnet | — | todo |
 | P0-L3 | Token-metering logging util | §1.9, §4.5 | — | PAR | Haiku | — | todo |
 | P0-W1 | mGBA-WASM spike (gbajs3) | §1.3 | P0-FX1 | PAR | Sonnet | ✋ | signed-off (GO: @thenick775/mgba-wasm@2.4.1) |
@@ -133,20 +133,34 @@ before Phase 1). P0-B1 + P0-W1 de-risking spikes.
   win32 root. Not a jail escape (verifier confirmed), but a local-host-only
   footgun; the POSIX `/work` remote adapter is unaffected.
 
-- **P0-L1 built (not yet independently verified):** `packages/adapter-local`
+- **P0-L1 verified (independent, fresh-context, Opus).** `packages/adapter-local`
   implements `ExecFileAdapter` by shelling out per-call to `docker run`
-  against `gba-studio-toolchain:dev`; `verify_rom/` is bind-mounted into the
-  container rather than baked in (P0-A2 will bake it in, at which point the
-  mount can be dropped). New `verify_rom/screenshot_rom.py` (not a separate
-  TASKS.md item — it's the screenshot half of the adapter contract) captures
-  frames via `mgba.image.Image.save_png`; needed a close-safe `BytesIO`
-  subclass since libmgba's PNG writer calls `.close()` on the fileobj it's
-  handed before the caller can read the bytes back out. `build()` locates
-  the produced `.gba` by newest mtime in the project root rather than
-  assuming a filename from `TARGET`, since that's project-Makefile-defined.
-  Integration test (`adapter.test.ts`) runs a real `docker run` end to end
-  against the P0-FX1 known-good fixture; self-skips if Docker/the image
-  aren't available. Reviewer: confirm the not-yet-independently-verified
-  claim, re-run the suite fresh, and check the TIMEOUT-vs-TRANSPORT error
-  mapping choices in `adapter.ts` are sound.
+  against `gba-studio-toolchain:dev`; `verify_rom/` is bind-mounted read-only
+  into the container rather than baked in (P0-A2 will bake it in, at which
+  point the mount can be dropped). New `verify_rom/screenshot_rom.py` (not a
+  separate TASKS.md item — it's the screenshot half of the adapter contract)
+  captures frames via `mgba.image.Image.save_png`; needed a close-safe
+  `BytesIO` subclass since libmgba's PNG writer calls `.close()` on the
+  fileobj it's handed before the caller can read the bytes back out.
+  `build()` locates the produced `.gba` by newest mtime in the project root
+  rather than assuming a filename from `TARGET`, since that's
+  project-Makefile-defined. Verifier confirmed path-jailing, the
+  errors-as-values discipline, the "build failure is a successful call"
+  rule, and the TIMEOUT/TRANSPORT/INVALID/NOT_FOUND mapping choices in
+  `adapter.ts` all hold up, via a real (not mocked) `docker run` against the
+  P0-FX1 known-good fixture plus adversarial checks (`--network none`
+  egress, shell-metacharacter injection).
+  **Finding, fixed post-verification:** the jailed `romPath` was interpolated
+  into the `bash -lc` command string for `verifyRom`/`screenshot` without
+  shell-quoting — path-jailing blocks directory escapes but not shell
+  metacharacters in a filename (verifier's PoC: `poc$(touch PWNED).gba`
+  executed the substitution in-container). Fixed with a `shellQuote` helper
+  in `adapter.ts`; regression test added (`adapter.test.ts`, "shell
+  metacharacters in a romPath are not executed") confirms the substitution
+  no longer runs. The verify_rom mount was also switched to `:ro` as cheap
+  defense-in-depth. Low severity as scoped (the only caller already has
+  arbitrary `bash()` in the same container) but worth carrying forward: if
+  this adapter is ever composed behind a less-trusted caller, re-audit for
+  other unescaped interpolation into shell command strings.
+  Windows reserved device names remain unfixed (separate carried note above).
 
