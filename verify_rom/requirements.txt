@@ -1,0 +1,4 @@
+# Runtime: the `mgba` bindings (libmgba) are provided by the toolchain image,
+# built from source with -DBUILD_PYTHON=ON — NOT installable here. See README.
+# This file is only the test-time dependency.
+pytest>=8.0
